@@ -6,9 +6,10 @@ using System.Linq;
 using System.Reflection;
 using UnityEngine;
 
-public class Modmanager : MonoBehaviour {
-        
-    Dictionary<string, MethodInfo> updatemod = new Dictionary<string, MethodInfo>();
+public class Modmanager : MonoBehaviour
+{
+    public static Dictionary<string, Dictionary<string, string>> ModConfig = new Dictionary<string, Dictionary<string, string>>();
+    
     Dictionary<string, object> instancemod = new Dictionary<string, object>();
     Dictionary<string, System.Type> typemod = new Dictionary<string, System.Type>();
 
@@ -22,24 +23,80 @@ public class Modmanager : MonoBehaviour {
 
     void Start ()
     {
-        StartCoroutine(LoadMod(@"file:///E:\Work\Unity\ShittyTest\TestMod\TestMod\bin\Debug\TestMod.dll"));
-        string[] filenames;
-        filenames = Directory.GetFiles(Environment.CurrentDirectory, "*.*", SearchOption.TopDirectoryOnly);
-        File.WriteAllText("test.txt", filenames.ToString());
+        StartCoroutine(CheckModFolder());
     }
 	
-	void Update ()
+    IEnumerator CheckModFolder()
     {
-		foreach(KeyValuePair<string, MethodInfo> modUpdate in updatemod)
+        if (Directory.Exists("Mods"))
         {
-            modUpdate.Value.Invoke(instancemod[modUpdate.Key], null);
-        }
-	}
+            string[] mods = Directory.GetDirectories(Path.Combine(Environment.CurrentDirectory, "Mods"));
 
-    IEnumerator LoadMod(string path)
+            foreach (string mod in mods)
+            {
+                while(m_isLoadingMod)
+                {
+                    yield return null;
+                }
+
+                if (File.Exists(Path.Combine(mod, "config.ini")))
+                {
+                    string[] configFile = File.ReadAllLines(Path.Combine(mod, "config.ini"));
+
+                    Dictionary<string, string> config = new Dictionary<string, string>();
+
+                    foreach (string line in configFile)
+                    {
+                        string l;
+
+                        if (line.Contains("#") || line.Contains("//"))
+                        {
+                            l = line.Split(new string[] { "#" }, StringSplitOptions.None)[0];
+                            l = l.Split(new string[] { "//" }, StringSplitOptions.None)[0];
+                        }
+                        else
+                        {
+                            l = line;
+                        }
+
+                        if (l.Contains("="))
+                        {
+                            string[] c = l.Split('=').Select(side => side.Trim()).ToArray();
+                            config[c[0]] = c[1];
+                        }
+                    }
+
+                    if(config.ContainsKey("LoadMod") && config["LoadMod"] == "false")
+                    {
+                        continue;
+                    }
+
+                    ModConfig.Add(config["ModName"], config);
+
+                    if (config["ModAssembly"] != null)
+                    {
+                        StartCoroutine(LoadMod(@"file:///" + Path.Combine(mod, config["ModAssembly"]), config["ModName"]));
+                    }
+                    else
+                    {
+                        Debug.LogWarning("Modmanager: " + config["ModName"] + " has no ModAssembly, skipping ...");
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning("Modmanager: " + mod.Split('\\').Last() + " has no config.ini, skipping ...");
+                }
+            }
+        }
+
+        yield return null;
+    }
+
+    IEnumerator LoadMod(string path, string modName)
     {
         if (!m_isLoadingMod)
         {
+            m_isLoadingMod = true;
 
             m_www = new WWW(path);
 
@@ -51,12 +108,12 @@ public class Modmanager : MonoBehaviour {
             Assembly assembly = LoadAssembly();
             if (assembly != null)
             {
-                OnAssemblyLoaded(new WWWAssembly(m_www.url, assembly));
+                OnAssemblyLoaded(new WWWAssembly(m_www.url, assembly), modName);
             }
         }
         else
         {
-            Debug.Log("Modmanager is already trying to load a mod!");
+            Debug.LogWarning("Modmanager: Already trying to load a mod!");
         }
 
         yield return null;
@@ -70,32 +127,28 @@ public class Modmanager : MonoBehaviour {
         }
         catch (System.Exception e)
         {
-            Debug.Log("ERROR: Loading Mod " + m_www.url + "\n" + e.ToString());
+            Debug.LogWarning("Modmanager: Error loading Mod " + m_www.url + "\n" + e.ToString());
             return null;
         }
     }
 
-    void OnAssemblyLoaded(WWWAssembly loadedAssembly)
+    void OnAssemblyLoaded(WWWAssembly loadedAssembly, string modName)
     {
-        System.Type type = loadedAssembly.Assembly.GetType("TestMod.Main");
-
-        object instance = loadedAssembly.Assembly.CreateInstance("TestMod.Main");
+        System.Type type = loadedAssembly.Assembly.GetType(modName + ".Main");
         
-        FieldInfo fieldmodName = type.GetField("ModName");
-        string modName = (fieldmodName.GetValue(null) as string);
-
+        object instance = loadedAssembly.Assembly.CreateInstance(modName + ".Main");
+        
         FieldInfo fieldmodVersion = type.GetField("ModVersion");
-        string modVersion = (fieldmodVersion.GetValue(null) as string);
+        string modVersion = ModConfig[modName]["ModVersion"];
 
-        Debug.Log("Successfully loaded " + modName + " V" + modVersion);        
+        Debug.Log("Modmanager: Mod successfully loaded: " + modName + " V" + modVersion);        
 
         typemod.Add(modName, type);
         instancemod.Add(modName, instance);
         
         MethodInfo start = type.GetMethod("Start");
         start.Invoke(instance, null);
-
-        updatemod.Add(modName, type.GetMethod("Update"));
+        
         m_isLoadingMod = false;
     }
 }
